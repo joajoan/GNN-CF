@@ -1,8 +1,9 @@
 # Namespace.
 import torch
 import json
+import os
 
-# Constructor.
+# Capital.
 from torch_geometric.data import HeteroData
 from argparse import ArgumentParser
 
@@ -27,9 +28,6 @@ def make_data(data: list[tuple]) -> HeteroData:
     # Infers the unique user and item labels.
     unique_users = sorted(set(user_list))
     unique_items = sorted(set(item_list))
-    # Makes the label ordering known and reproducible.
-    unique_users = sorted(unique_users)
-    unique_items = sorted(unique_items)
     # Creates mappings from labels to index positions.
     user_map = {user: index for index, user in enumerate(unique_users)}
     item_map = {item: index for index, item in enumerate(unique_items)}
@@ -54,12 +52,29 @@ def make_data(data: list[tuple]) -> HeteroData:
     # Specifies the weights of the edges.
     data['user', 'rated', 'item'].edge_attr = edge_attr
     data['item', 'rated_by', 'user'].edge_attr = edge_attr
+    
+    # Sets the node and edge IDs.
+    data.generate_ids()
 
     # Returns the graph dataset.
     return data
 
 
 def run(source: str, target: str) -> None:
+
+    # Ensures a valid source file-path.
+    assert os.path.isfile(source)
+    # Ensures a valid target file-path.
+    if target is None:
+        target = os.path.dirname(source)
+    assert os.path.exists(target)
+    if os.path.isdir(target):
+        # Infers the name stem of the source file.
+        name = os.path.basename(source)
+        stem = os.path.splitext(name)[0]
+        # Creates the target file-path.
+        target = os.path.join(target, stem + '.pt')
+
     # Loads and parses the file content into memory.
     data = load_data(source)
     # Creates a heterogeneous dataset from the parsed file contents.
@@ -83,7 +98,8 @@ def main(*args) -> None:
     parser.add_argument('-t', '--target', 
         type=str, 
         help='Path to a file to store the created dataset', 
-        metavar='PATH'
+        metavar='PATH',
+        default=None
     )
     args = parser.parse_args(*args)
 
