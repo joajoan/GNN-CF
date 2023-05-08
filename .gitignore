@@ -1,3 +1,4 @@
-data/*
-refs/*
+/data/
+/refs/
+/out/
 __pycache__/

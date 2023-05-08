@@ -1,3 +1,2 @@
-
 # Specifying the target edge.
-TRG_EDGE = ('user', 'rated', 'item')
+TARGET_EDGE = ('user', 'rated', 'item')
