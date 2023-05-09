@@ -109,10 +109,11 @@ def dispatch_session(
 
         # Validates the model, if a function is given.
         if validate_fn is not None:
-            loss = validate_fn(module, 
-                verbose=verbose, 
-                device=device
-            )
+            with torch.no_grad():
+                loss = validate_fn(module, 
+                    verbose=verbose, 
+                    device=device
+                )
             trace['validate'].append(loss)
             if verbose:
                 print(f'Validate({loss:.4f})')

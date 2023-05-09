@@ -7,7 +7,7 @@ from torch_geometric.typing import EdgeType, NodeType
 from torch import device
 
 from .base import InnerProduct, NodeEmbedding
-from .base import triplet_handler
+from .utils import triplet_handler
 
 
 __all__ = (
@@ -38,21 +38,26 @@ class MF(Module):
         
 
     def forward(self, 
-        src_n_id: tuple[NodeType, Tensor], 
-        dst_n_id: tuple[NodeType, Tensor],
-        edge_index: Tensor, 
+        usr_n_id: tuple[NodeType, Tensor], 
+        itm_n_id: tuple[NodeType, Tensor],
+        edge_label_index: Tensor, 
     ) -> Tensor:
         # Unpacks the input arguments.
-        src_node, src_n_id = src_n_id
-        dst_node, dst_n_id = dst_n_id
-        src_idx, dst_idx = edge_index
+        usr_node, usr_n_id = usr_n_id
+        itm_node, itm_n_id = itm_n_id
+        usr_idx, itm_idx = edge_label_index
         # Constructs the embeddings.
-        src_x, dst_x = self.embedding({
-            src_node: src_n_id,
-            dst_node: dst_n_id
+        usr_x, itm_x = self.embedding({
+            usr_node: usr_n_id,
+            itm_node: itm_n_id
         }).values()
-        # Computes and returns the predicted scores.
-        return self.regressor(src_x[src_idx], dst_x[dst_idx])
+        # Computes edge scores.
+        edge_score = self.regressor(
+            src_x=usr_x[usr_idx], 
+            dst_x=itm_x[itm_idx]
+        )
+        # Returns the estimated edge scores.
+        return edge_score
     
 
 def evaluate(
@@ -64,27 +69,24 @@ def evaluate(
     device: device
 ) -> Tensor:
     # Unpacks the given edge_type.
-    src_node, _, dst_node = edge_type
+    usr_node, _, itm_node = edge_type
     # Sends the items to the correct device.
     data = data.to(device)
-
     # Computes the embedding propegation.
     x = module.embedding({
-        src_node: data[src_node].n_id,
-        dst_node: data[dst_node].n_id
+        usr_node: data[usr_node].n_id,
+        itm_node: data[itm_node].n_id
     })
     # Extracts the sought feature tensors.
-    src_x, dst_pos_x, dst_neg_x = triplet_handler(data, x,
-        src_node=src_node,
-        dst_node=dst_node
+    usr_x, itm_pos_x, itm_neg_x = triplet_handler(data, x,
+        src_node=usr_node,
+        dst_node=itm_node
     )
     # Computes the link scores.
-    y_pos = module.regressor(src_x, dst_pos_x)
-    y_neg = module.regressor(src_x, dst_neg_x)
-
+    pos_edge_score = module.regressor(usr_x, itm_pos_x)
+    neg_edge_score = module.regressor(usr_x, itm_neg_x)
     # Computes the loss.
-    loss = loss_fn(y_pos, y_neg)
-
+    loss = loss_fn(pos_edge_score, neg_edge_score)
     # Returns the loss.
     return loss
 
@@ -97,24 +99,20 @@ def predict(
     edge_type: EdgeType,
     device: device
 ) -> Tensor:
-    
+    # Unpacks the given edge_type.
+    usr_node, _, itm_node = edge_type
     # Sends the items to the correct device.
     data = data.to(device)
-
     # Extracts the edge (label) index.
     try:
-        edge_index = data[edge_type].edge_label_index
+        edge_label_index = data[edge_type].edge_label_index
     except AttributeError:
-        edge_index = data[edge_type].edge_index
-
-    # Unpacks the given edge_type.
-    src_node, _, dst_node = edge_type
+        edge_label_index = data[edge_type].edge_index
     # Computes the edge scores.
     scores = module(
-        src_n_id=(src_node, data[src_node].n_id),
-        dst_n_id=(dst_node, data[dst_node].n_id),
-        edge_index=edge_index
+        usr_n_id=(usr_node, data[usr_node].n_id),
+        itm_n_id=(itm_node, data[itm_node].n_id),
+        edge_label_index=edge_label_index
     )
-
     # Returns the computed scores.
     return scores

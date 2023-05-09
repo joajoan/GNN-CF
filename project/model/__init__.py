@@ -1,7 +1,14 @@
+# Exposing the base and utils modules.
+from . import base, utils 
+
 # Matrix Factorization.
-from . import mf
 from .mf import MF
+from . import mf
 
 # Neural Graph Collaborative Filtering.
-# from . import ngcf
-# from .ngcf import NGCF
+from .ngcf import NGCF
+from . import ngcf
+
+# Light Graph Convolution Network.
+from .light_gcn import LightGCN
+from . import light_gcn
