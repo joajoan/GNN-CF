@@ -1,14 +1,17 @@
 import torch
 from torch import Tensor
-from torch.nn import Embedding, Linear, Module, ModuleDict
-from torch_geometric.typing import NodeType
+from torch.nn import Embedding, Module, ModuleDict
+from torch_geometric.data import HeteroData
+from torch_geometric.typing import EdgeType, NodeType
+from torch import device
 from torch.nn import init
+from .utils import triplet_handler
 
 
 __all__ = (
-    'EdgeRegressor',
     'NodeEmbedding',
-    'InnerProduct'
+    'InnerProduct',
+    'InnerRegressor'
 )
 
 
@@ -54,26 +57,3 @@ class InnerProduct(Module):
             src_x.unsqueeze(-2),
             dst_x.unsqueeze(-1)
         ).squeeze()
-    
-
-class EdgeRegressor(Linear):
-
-    def __init__(self, 
-        in_dim: int, 
-        out_dim: int = 1, 
-        bias: bool = False, 
-        **kwargs
-    ) -> None:
-        super().__init__(
-            in_features=in_dim,
-            out_features=out_dim,
-            bias=bias,
-            **kwargs
-        )
-        self.weight.data = init.ones_(self.weight.data)
-        if self.bias:
-            self.bias.data = init.zeros_(self.bias.data)
-
-
-    def forward(self, src_x: Tensor, dst_x: Tensor) -> Tensor:
-        return super().forward(src_x * dst_x)

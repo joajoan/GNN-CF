@@ -173,7 +173,7 @@ class LightGCN(Module):
             usr_edge_index=usr_edge_index,
             itm_edge_index=itm_edge_index
         )
-        # Computes edge scores.
+        # Computes the edge scores.
         edge_score = self.regressor(
             src_x=usr_x[usr_idx], 
             dst_x=itm_x[itm_idx]

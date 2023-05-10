@@ -15,8 +15,8 @@ from itertools import pairwise
 from torch.nn import init
 from torch import device
 
-from project.model.base import InnerProduct, NodeEmbedding
-from project.model.utils import make_weight, make_undirected, triplet_handler
+from .base import InnerProduct, NodeEmbedding
+from .utils import make_weight, make_undirected, triplet_handler
 
 
 class EmbPropCell(Module):
