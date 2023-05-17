@@ -1,17 +1,13 @@
 import torch
 from torch import Tensor
 from torch.nn import Embedding, Module, ModuleDict
-from torch_geometric.data import HeteroData
-from torch_geometric.typing import EdgeType, NodeType
-from torch import device
+from torch_geometric.typing import NodeType
 from torch.nn import init
-from .utils import triplet_handler
 
 
 __all__ = (
     'NodeEmbedding',
-    'InnerProduct',
-    'InnerRegressor'
+    'InnerProduct'
 )
 
 

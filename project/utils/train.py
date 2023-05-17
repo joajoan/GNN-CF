@@ -5,6 +5,13 @@ import os
 from torch.nn import Module
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
+from .device import get_device
+
+
+__all__ = (
+    'dispatch_epoch', 
+    'dispatch_session'
+)
 
 
 def dispatch_epoch(
@@ -18,6 +25,8 @@ def dispatch_epoch(
     verbose: bool = False
 ) -> float:
 
+    # Resolves the target device.
+    device = get_device(device)
     # Sends the model to the specified device.
     module = module.to(device)
     # Empties the GPU cache, if that device is set.
@@ -36,7 +45,7 @@ def dispatch_epoch(
         if optimizer:
             optimizer.zero_grad()
 
-        # Constructs the design and target data structures.
+        # Computes the loss.
         loss = batch_handler(module, batch, loss_fn, 
             device=device
         )
@@ -64,11 +73,8 @@ def dispatch_session(
     verbose: bool = False,
 ) -> None:
     
-    # Ensures a device is specified.
-    if device is None:
-        device = torch.device(
-            'cuda' if torch.cuda.is_available() else 'cpu'
-        )
+    # Resolves the target device.
+    device = get_device(device)
         
     # Builds the needed paths.
     if not os.path.exists(path):
@@ -89,7 +95,7 @@ def dispatch_session(
     if score_fn is not None:
         trace |= {'score': []}
 
-    # Iterates
+    # Dispatches the specified number of epochs.
     for epoch_index in range(1, num_epochs+1):
 
         # Outputs the current epoch index.

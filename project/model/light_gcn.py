@@ -6,9 +6,10 @@ from torch.nn import Module
 from torch_geometric.data import HeteroData
 from torch_geometric.typing import EdgeType, NodeType
 from torch import device
+from . import utils
+
 
 from .base import InnerProduct, NodeEmbedding
-from project.model.utils import make_weight, make_undirected, triplet_handler
 
 
 __all__ = (
@@ -75,11 +76,17 @@ class LGCProp(LGConv):
     ) -> Tensor:
         # Updates the edge indices to be undirected.
         if self.undirected:
-            usr_edge_index = make_undirected(usr_edge_index, itm_edge_index)
-            itm_edge_index = usr_edge_index.flip(0)
+            usr_edge_index = utils.make_undirected(
+                src_edge_index=usr_edge_index, 
+                dst_edge_index=itm_edge_index
+            )
+            itm_edge_index = utils.make_undirected(
+                src_edge_index=itm_edge_index, 
+                dst_edge_index=usr_edge_index
+            )
         # Generates the edge weights for both node types.
-        usr_edge_weight = make_weight(usr_edge_index)
-        itm_edge_weight = make_weight(itm_edge_index)
+        usr_edge_weight = utils.make_weight(usr_edge_index)
+        itm_edge_weight = utils.make_weight(itm_edge_index)
         # Constructs the new embeddings.
         new_usr_x = torch.zeros_like(usr_x)
         new_itm_x = torch.zeros_like(itm_x)
@@ -182,7 +189,7 @@ class LightGCN(Module):
         return edge_score
     
 
-def evaluate(
+def eval_triplet(
     module: LightGCN, 
     data: HeteroData, 
     loss_fn: callable,
@@ -205,7 +212,7 @@ def evaluate(
         itm_edge_index=itm_edge_index
     )
     # Extracts the sought feature tensors.
-    usr_x, itm_pos_x, itm_neg_x = triplet_handler(data, 
+    usr_x, itm_pos_x, itm_neg_x = utils.get_triplet_xs(data, 
         x={
             usr_node: usr_x, 
             itm_node: itm_x
@@ -216,14 +223,49 @@ def evaluate(
     # Computes the link scores.
     pos_edge_score = module.regressor(usr_x, itm_pos_x)
     neg_edge_score = module.regressor(usr_x, itm_neg_x)
+    # Isolates the node embeddings.
+    node_embs = utils.get_embeddings(
+        embedding=module.embedding.embedding, 
+        data=data,
+        src_node=usr_node,
+        dst_node=itm_node
+    )
     # Computes the loss.
-    loss = loss_fn(pos_edge_score, neg_edge_score)
+    loss = loss_fn(pos_edge_score, neg_edge_score, 
+        params=node_embs
+    )
     # Returns the loss.
     return loss
 
 
+def eval_binary(
+    module: LightGCN,
+    data: HeteroData, 
+    loss_fn: callable,
+    *,
+    edge_type: EdgeType,
+    device: device
+) -> Tensor:
+    # Unpacks the given edge_type.
+    usr_node, _, itm_node = edge_type
+    # Sends the items to the correct device.
+    data = data.to(device)
+    # Computes the edge scores.
+    edge_score = module.forward(
+        usr_n_id=(usr_node, data[usr_node].n_id),
+        itm_n_id=(itm_node, data[itm_node].n_id),
+        usr_edge_index=data[usr_node, itm_node].edge_index,
+        itm_edge_index=data[itm_node, usr_node].edge_index,
+        edge_label_index=data[edge_type].edge_label_index
+    )
+    # Computes the loss.
+    loss = loss_fn(edge_score, data[edge_type].edge_label)
+    # Returns the computed scores.
+    return loss
+
+
 @torch.no_grad()
-def predict(
+def pred(
     module: LightGCN, 
     data: HeteroData, 
     *,

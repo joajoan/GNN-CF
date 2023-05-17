@@ -4,10 +4,9 @@ from torch import Tensor
 from torch.nn import Module
 from torch_geometric.data import HeteroData
 from torch_geometric.typing import EdgeType, NodeType
-from torch import device
-
 from .base import InnerProduct, NodeEmbedding
-from .utils import triplet_handler
+from torch import device
+from . import utils
 
 
 __all__ = (
@@ -60,57 +59,92 @@ class MF(Module):
         return edge_score
     
 
-    def evaluate(self,
-        data: HeteroData, 
-        loss_fn: callable,
-        *,
-        edge_type: EdgeType,
-        device: device
-    ) -> Tensor:
-        # Unpacks the given edge_type.
-        usr_node, _, itm_node = edge_type
-        # Sends the items to the correct device.
-        data = data.to(device)
-        # Computes the embedding propegation.
-        x = self.embedding({
-            usr_node: data[usr_node].n_id,
-            itm_node: data[itm_node].n_id
-        })
-        # Extracts the sought feature tensors.
-        usr_x, itm_pos_x, itm_neg_x = triplet_handler(data, x,
-            src_node=usr_node,
-            dst_node=itm_node
-        )
-        # Computes the link scores.
-        pos_edge_score = self.regressor(usr_x, itm_pos_x)
-        neg_edge_score = self.regressor(usr_x, itm_neg_x)
-        # Computes the loss.
-        loss = loss_fn(pos_edge_score, neg_edge_score)
-        # Returns the loss.
-        return loss
+def eval_triplet(
+    module: MF,
+    data: HeteroData, 
+    loss_fn: callable,
+    *,
+    edge_type: EdgeType,
+    device: device
+) -> Tensor:
+    # Unpacks the given edge_type.
+    usr_node, _, itm_node = edge_type
+    # Sends the items to the correct device.
+    data = data.to(device)
+    # Computes the embedding propegation.
+    x = module.embedding({
+        usr_node: data[usr_node].n_id,
+        itm_node: data[itm_node].n_id
+    })
+    # Extracts the sought feature tensors.
+    usr_x, itm_pos_x, itm_neg_x = utils.get_triplet_xs(data, x,
+        src_node=usr_node,
+        dst_node=itm_node
+    )
+    # Computes the link scores.
+    pos_edge_score = module.regressor(usr_x, itm_pos_x)
+    neg_edge_score = module.regressor(usr_x, itm_neg_x)
+    # Isolates the node embeddings.
+    node_embs = utils.get_embeddings(
+        embedding=module.embedding, 
+        data=data,
+        src_node=usr_node,
+        dst_node=itm_node
+    )
+    # Computes the loss.
+    loss = loss_fn(pos_edge_score, neg_edge_score, 
+        params=node_embs
+    )
+    # Returns the loss.
+    return loss
 
 
-    @torch.no_grad()
-    def predict(self,
-        data: HeteroData, 
-        *,
-        edge_type: EdgeType,
-        device: device
-    ) -> Tensor:
-        # Unpacks the given edge_type.
-        usr_node, _, itm_node = edge_type
-        # Sends the items to the correct device.
-        data = data.to(device)
-        # Extracts the edge (label) index.
-        try:
-            edge_label_index = data[edge_type].edge_label_index
-        except AttributeError:
-            edge_label_index = data[edge_type].edge_index
-        # Computes the edge scores.
-        scores = self.forward(
-            usr_n_id=(usr_node, data[usr_node].n_id),
-            itm_n_id=(itm_node, data[itm_node].n_id),
-            edge_label_index=edge_label_index
-        )
-        # Returns the computed scores.
-        return scores
+def eval_binary(
+    module: MF,
+    data: HeteroData, 
+    loss_fn: callable,
+    *,
+    edge_type: EdgeType,
+    device: device
+) -> Tensor:
+    # Unpacks the given edge_type.
+    usr_node, _, itm_node = edge_type
+    # Sends the items to the correct device.
+    data = data.to(device)
+    # Computes the edge scores.
+    edge_score = module.forward(
+        usr_n_id=(usr_node, data[usr_node].n_id),
+        itm_n_id=(itm_node, data[itm_node].n_id),
+        edge_label_index=data[edge_type].edge_label_index
+    )
+    # Computes the loss.
+    loss = loss_fn(edge_score, data[edge_type].edge_label)
+    # Returns the computed scores.
+    return loss
+
+
+@torch.no_grad()
+def pred(
+    module: MF,
+    data: HeteroData, 
+    *,
+    edge_type: EdgeType,
+    device: device
+) -> Tensor:
+    # Unpacks the given edge_type.
+    usr_node, _, itm_node = edge_type
+    # Sends the items to the correct device.
+    data = data.to(device)
+    # Extracts the edge (label) index.
+    try:
+        edge_label_index = data[edge_type].edge_label_index
+    except AttributeError:
+        edge_label_index = data[edge_type].edge_index
+    # Computes the edge scores.
+    scores = module.forward(
+        usr_n_id=(usr_node, data[usr_node].n_id),
+        itm_n_id=(itm_node, data[itm_node].n_id),
+        edge_label_index=edge_label_index
+    )
+    # Returns the computed scores.
+    return scores
