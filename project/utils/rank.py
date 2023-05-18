@@ -4,10 +4,19 @@ from torch import Tensor
 from torch.nn import Module
 from torch.utils.data import DataLoader
 from torch_geometric.typing import EdgeType
+from typing import NamedTuple
 from . import get_device
 
 
 __all__ = ('rank_k',) 
+
+
+class Ranking(NamedTuple):
+    score: Tensor
+    label: Tensor
+    count: Tensor
+    item: Tensor
+    user: Tensor
 
 
 @torch.no_grad()
@@ -20,95 +29,94 @@ def rank_k(
     edge_type: EdgeType,
     device: torch.device = None,
     verbose: bool = False
-) -> tuple[Tensor, Tensor]:
+) -> Ranking:
     
     # Resolves the device.
     device = get_device(device)
     # Empties the GPU cache, if that device is set.
     if device.type == 'cuda':
         torch.cuda.empty_cache()
+    # Setting up the model for evaluation.
+    module = module.to(device).eval()
     # Unpacks the given edge type.
-    src_node, _, _ = edge_type
+    src_node, _, dst_node = edge_type
 
     # Identifies the total number of source node and their respective IDs.
-    gbl_uid = loader.data[edge_type].edge_label_index[0].unique().to(device)
-    gbl_cnt = gbl_uid.numel()
-    # Setting up the storage buffers.
-    scr_buf = torch.full([gbl_cnt, 2 * at_k], 
-        fill_value=-torch.inf, 
-        device=device
-    )  # predicted scores
-    lbl_buf = torch.empty(gbl_cnt, 2 * at_k, device=device)  # ground-truth labels
-    pos_cnt = torch.zeros(gbl_cnt, dtype=torch.int, device=device)  # relevant item counts
+    gbl_idx = loader.data[edge_type].edge_label_index[0].unique()
+    gbl_uid = loader.data[src_node].n_id[gbl_idx].to(device)
 
-    # Wraps the loader in a progress tracker, if verbose is set.
+    # Wraps the loader in a progress tracker object, if verbose is set.
     if verbose is True:
-        loader = tqdm.tqdm(loader, mininterval=1., position=0, leave=True)
-    # Iterates over batched edges from the loader.
-    for batch in loader:
+        loader_ = tqdm.tqdm(loader, mininterval=1., position=0, leave=True)
+    else:
+        loader_ = loader
+    # Creates the hash-map that is to be housing the output buffers.
+    score_buffer = [list() for _ in gbl_uid]
+    label_buffer = [list() for _ in gbl_uid]
+    id_buffer = [list() for _ in gbl_uid]
+    # Iterates over the data-loader's batches.
+    for batch in loader_:
 
-        # Predicts the edge-wise score.
-        edge_score = pred_fn(module, batch, 
-            edge_type=edge_type, 
+        # Predicts edge-wise scores.
+        edge_score = pred_fn(module,
+            data=batch,
+            edge_type=edge_type,
             device=device
         )
-        # Extracts the edge label tensor.
+
+        # Unpacks the edge label index.
+        src_idx, dst_idx = batch[edge_type].edge_label_index
+        # Derives the source and destination node IDs.
+        src_id = batch[src_node].n_id[src_idx]
+        dst_id = batch[dst_node].n_id[dst_idx]
+        # Extracts the edge labels and destination node IDs.
         edge_label = batch[edge_type].edge_label
-        
-        # Unpacks the edge label indices.
-        src_idx, _ = batch[edge_type].edge_label_index
-        # Identifies what node IDs the indices represent.
-        src_ids = batch[src_node].n_id[src_idx]
-        # Infers the relevant source node IDs and their counts.
-        src_uid, uid_cnt = src_ids.unique(return_counts=True)
 
-        # Infers the source nodes in the tracked set.
-        gbl_msk = (
-            gbl_uid.unsqueeze(-1) 
+        # Identifies the unique source node IDs in the batch.
+        src_uid = src_id.unique()
+        # Infers the relevant source nodes in the tracked set.
+        out_idx = (
+            gbl_uid.unsqueeze(1) 
                 == 
-            src_uid.unsqueeze(-2)
-        ).any(dim=-1)
+            src_uid.unsqueeze(0)
+        ).any(dim=-1).nonzero().ravel()
+        # Generates the relevant nodes' element mask.
+        out_msk = gbl_uid[out_idx].unsqueeze(1) == src_id.unsqueeze(0)
+        
+        # Updates the relevant source nodes' buffers.
+        for idx, msk in zip(out_idx, out_msk):
+            score_buffer[idx].append(edge_score[msk].cpu())
+            label_buffer[idx].append(edge_label[msk].cpu())
+            id_buffer[idx].append(dst_id[msk].cpu())
 
-        # Infers the temporary buffer sizes.
-        row_cnt = gbl_msk.sum().item()
-        col_cnt = max(at_k, uid_cnt.max().item())
-        # Constructs the temporary buffer sizes.
-        scr_tmp = torch.full([row_cnt, col_cnt], 
-            fill_value=-torch.inf, 
-            device=device
-        )
-        lbl_tmp = torch.empty(row_cnt, col_cnt, device=device)
+    # Concatenates all sub-buffers for the score, label and ID buffers.
+    scores = [torch.cat(buffer) for buffer in score_buffer]
+    labels = [torch.cat(buffer) for buffer in label_buffer]
+    ids = [torch.cat(buffer) for buffer in id_buffer]
 
-        # Builds the second dimension's indices.
-        col_idx = torch.cat([
-            torch.arange(cnt, device=device) for cnt in uid_cnt
-        ])
-        # Fills the buffers.
-        scr_tmp[src_idx, col_idx] = edge_score
-        lbl_tmp[src_idx, col_idx] = edge_label
+    # Initializes the positive edge counter.
+    positive_count = []
+    # Initializes the top-k score, label and id buffers.
+    score_top, label_top, id_top = [], [], []
+    # Computes the top-k item scores, labels and ids.
+    for scores, labels, ids in zip(scores, labels, ids):
 
-        # Selects the top-k elements.
-        scr_tmp, top_idx = torch.topk(scr_tmp, k=at_k, dim=-1, sorted=False)
-        lbl_tmp = lbl_tmp.gather(dim=1, index=top_idx)
+        # Computes the top-k values and their indices.
+        scores, index = torch.topk(scores, k=at_k)
 
-        # Updates buffers.
-        scr_buf[gbl_msk, at_k:] = scr_tmp
-        lbl_buf[gbl_msk, at_k:] = lbl_tmp
-        # Sorts the main buffers.
-        buf_idx = scr_buf.argsort(dim=-1, descending=True)
-        # Updates the buffer orderings.
-        scr_buf = scr_buf.gather(dim=-1, index=buf_idx)
-        lbl_buf = lbl_buf.gather(dim=-1, index=buf_idx)
+        # Saves the top-k scores, labels and ids.
+        score_top.append(scores)
+        label_top.append(labels[index])
+        id_top.append(ids[index])
 
-        # Updates the total positive edges per source node.
-        pos_cnt[gbl_msk] += torch.zeros(row_cnt, 
-            dtype=torch.int,
-            device=device
-        ).scatter_add(
-            dim=0, 
-            index=src_idx, 
-            src=edge_label.int()
-        )
+        # Counts the total number of positive edges.
+        positive_count.append(labels.sum())
 
-    # Returns the top-k ranked labels and the total positive instances.
-    return lbl_buf.cpu(), pos_cnt.cpu()
+    # Reformats the top-k buffers to pure tensors.
+    score = torch.stack(score_top)
+    label = torch.stack(label_top)
+    id = torch.stack(id_top)
+    count = torch.tensor(positive_count)
+
+    # Returns the top-k labels and the total positive edge count.
+    return Ranking(score, label, count, item=id, user=gbl_uid)

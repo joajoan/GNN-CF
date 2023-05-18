@@ -1,12 +1,11 @@
 import torch
 from torch import Tensor
-from .rank import rank_k
 
 
 __all__ = (
+    'composite_score',
     'ndcg_coefs',
     'ndcg_score',
-    'rank_score',
     'recall_score'
 )
 
@@ -46,15 +45,13 @@ def recall_score(score: Tensor, total: Tensor) -> Tensor:
     return score.sum(dim=-1) / total
 
 
-def rank_score(
-    *args,
+def composite_score(
+    label: Tensor,
+    total: Tensor,
+    *,
     score_fns: list[callable],
-    verbose: bool = False,
-    **kwargs
 ) -> list[float]:
-    # Computes the ranked labels and the total possitive instances.
-    labels, counts = rank_k(*args, verbose=verbose, **kwargs)
-    # Computes the scores 
-    scores = [score_fn(labels, counts).mean() for score_fn in score_fns]
-    # Returns the scores as a tensor.
-    return torch.tensor(scores).tolist()
+    return [
+        score_fn(label, total).mean().item() 
+            for score_fn in score_fns
+    ]
